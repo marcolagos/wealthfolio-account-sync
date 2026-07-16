@@ -1,0 +1,48 @@
+{
+  "id": "plaid-sync",
+  "name": "Plaid Sync",
+  "version": "0.1.0",
+  "description": "Auto-sync bank and brokerage accounts via Plaid",
+  "author": "Marco Lagos",
+  "main": "dist/addon.js",
+  "sdkVersion": "3.6.2",
+  "minWealthfolioVersion": "3.6.2",
+  "enabled": true,
+  "network": {
+    "allowedHosts": ["sandbox.plaid.com", "production.plaid.com"]
+  },
+  "permissions": [
+    {
+      "category": "accounts",
+      "functions": ["getAll", "create"],
+      "purpose": "Match Plaid accounts to Wealthfolio accounts and create new ones"
+    },
+    {
+      "category": "activities",
+      "functions": ["checkImport", "import", "saveMany"],
+      "purpose": "Import bank and investment transactions with duplicate detection"
+    },
+    {
+      "category": "secrets",
+      "functions": ["set", "get", "use", "delete"],
+      "purpose": "Store Plaid API credentials and access tokens securely"
+    },
+    {
+      "category": "network",
+      "functions": ["request"],
+      "purpose": "Fetch account data from the Plaid API"
+    }
+  ],
+  "hostDependencies": {
+    "@tanstack/react-query": "^5.90.0",
+    "@wealthfolio/addon-sdk": "^3.6.2",
+    "@wealthfolio/ui": "^3.6.0",
+    "date-fns": "^4.1.0",
+    "lucide-react": "^0.561.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "recharts": "^3.7.0"
+  },
+  "keywords": ["wealthfolio", "addon", "plaid", "sync"],
+  "license": "MIT"
+}
