@@ -4,6 +4,21 @@ All notable changes to this addon are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-07-18
+
+### Changed
+
+- **BREAKING — addon id renamed `plaid-sync` → `account-sync`.** This is a
+  fresh identity: the route is now `/addons/account-sync`, and the addon's
+  secret/storage namespace changes, so an existing install is not upgraded in
+  place — remove the old addon (and its connections/accounts) and install
+  this as new. Shared storage keys dropped their `plaid-` prefix
+  (`account-map`, `sync-state`, `sync-log`, `auto-sync-hours`);
+  provider-scoped keys (`plaid-*`, `snaptrade-*` credentials/items) are
+  unchanged. The Plaid `client_user_id` is now `wealthfolio-account-sync`.
+  No data-model change — done purely so nothing internal still reads
+  "plaid-sync" now that the addon spans both providers.
+
 ## [0.2.0] - 2026-07-18
 
 ### Added

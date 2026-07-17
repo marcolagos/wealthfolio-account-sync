@@ -15,17 +15,17 @@ import { loadSyncLog, runSync } from "../sync/orchestrator";
 
 // Query-key prefix: the query cache is shared with the host app.
 const K = {
-  configured: ["plaid-sync", "configured"] as const,
-  env: ["plaid-sync", "env"] as const,
-  items: ["plaid-sync", "items"] as const,
-  plaidAccounts: ["plaid-sync", "plaid-accounts"] as const,
-  wfAccounts: ["plaid-sync", "wf-accounts"] as const,
-  mapping: ["plaid-sync", "mapping"] as const,
-  syncLog: ["plaid-sync", "sync-log"] as const,
-  autoSyncHours: ["plaid-sync", "auto-sync-hours"] as const,
-  historyDays: ["plaid-sync", "history-days"] as const,
-  snapConfigured: ["plaid-sync", "snaptrade-configured"] as const,
-  snapAuthorizations: ["plaid-sync", "snaptrade-authorizations"] as const,
+  configured: ["account-sync", "configured"] as const,
+  env: ["account-sync", "env"] as const,
+  items: ["account-sync", "items"] as const,
+  plaidAccounts: ["account-sync", "plaid-accounts"] as const,
+  wfAccounts: ["account-sync", "wf-accounts"] as const,
+  mapping: ["account-sync", "mapping"] as const,
+  syncLog: ["account-sync", "sync-log"] as const,
+  autoSyncHours: ["account-sync", "auto-sync-hours"] as const,
+  historyDays: ["account-sync", "history-days"] as const,
+  snapConfigured: ["account-sync", "snaptrade-configured"] as const,
+  snapAuthorizations: ["account-sync", "snaptrade-authorizations"] as const,
 };
 
 export function usePlaidClient(ctx: AddonContext): PlaidClient {

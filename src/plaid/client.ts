@@ -253,7 +253,7 @@ export class PlaidClient {
   async createHostedLink(): Promise<LinkTokenCreateResponse> {
     const env = await this.getEnv();
     return this.post<LinkTokenCreateResponse>(env, "/link/token/create", {
-      user: { client_user_id: "wealthfolio-plaid-sync" },
+      user: { client_user_id: "wealthfolio-account-sync" },
       client_name: "Wealthfolio",
       products: ["transactions"],
       optional_products: ["investments"],
@@ -278,7 +278,7 @@ export class PlaidClient {
       itemId,
       "/link/token/create",
       {
-        user: { client_user_id: "wealthfolio-plaid-sync" },
+        user: { client_user_id: "wealthfolio-account-sync" },
         client_name: "Wealthfolio",
         country_codes: ["US"],
         language: "en",

@@ -21,16 +21,16 @@ const enable: AddonEnableFunction = (ctx) => {
   addonCtx = ctx;
 
   ctx.router.add({
-    id: "plaid-sync",
-    path: "/addons/plaid-sync",
+    id: "account-sync",
+    path: "/addons/account-sync",
     component: AddonRoute,
   });
 
   const sidebarItem = ctx.sidebar.addItem({
-    id: "plaid-sync",
+    id: "account-sync",
     label: "Account Sync",
     icon: "credit-card",
-    route: "/addons/plaid-sync",
+    route: "/addons/account-sync",
     order: 101,
   });
 

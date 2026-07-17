@@ -19,8 +19,8 @@ import {
   mapSnapTradeActivities,
 } from "./map-snaptrade";
 
-const STATE_KEY = "plaid-sync-state";
-const LOG_KEY = "plaid-sync-log";
+const STATE_KEY = "sync-state";
+const LOG_KEY = "sync-log";
 const LOG_LIMIT = 20;
 
 /** Plaid investments history reaches back at most ~24 months. */

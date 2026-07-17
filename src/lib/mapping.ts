@@ -30,7 +30,7 @@ export interface AccountMapping {
   ignored: string[];
 }
 
-const MAPPING_STORAGE_KEY = "plaid-account-map";
+const MAPPING_STORAGE_KEY = "account-map";
 
 export async function loadMapping(ctx: AddonContext): Promise<AccountMapping> {
   const raw = await ctx.api.storage.get(MAPPING_STORAGE_KEY);

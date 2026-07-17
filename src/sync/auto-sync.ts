@@ -3,13 +3,15 @@ import { loadMapping } from "../lib/mapping";
 import { PlaidClient } from "../plaid/client";
 import { loadSyncLog, runSync } from "./orchestrator";
 
-export const AUTO_SYNC_HOURS_KEY = "plaid-auto-sync-hours";
+export const AUTO_SYNC_HOURS_KEY = "auto-sync-hours";
 export const DEFAULT_AUTO_SYNC_HOURS = 24;
 
 export async function getAutoSyncHours(ctx: AddonContext): Promise<number> {
   const raw = await ctx.api.storage.get(AUTO_SYNC_HOURS_KEY);
   const parsed = raw == null ? NaN : Number(raw);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_AUTO_SYNC_HOURS;
+  return Number.isFinite(parsed) && parsed >= 0
+    ? parsed
+    : DEFAULT_AUTO_SYNC_HOURS;
 }
 
 /**
@@ -34,21 +36,21 @@ export async function maybeAutoSync(ctx: AddonContext): Promise<void> {
     if (lastRun && Date.now() - Date.parse(lastRun) < hours * 3_600_000) return;
 
     const run = await runSync(ctx);
-    ctx.api.query.invalidateQueries(["plaid-sync", "sync-log"]);
+    ctx.api.query.invalidateQueries(["account-sync", "sync-log"]);
     const failed = run.outcomes.filter((o) => o.error);
     const imported = run.outcomes.reduce((acc, o) => acc + o.imported, 0);
     if (run.error) {
-      ctx.api.toast.error(`Plaid auto-sync failed: ${run.error}`);
+      ctx.api.toast.error(`Auto-sync failed: ${run.error}`);
     } else if (failed.length > 0) {
       ctx.api.toast.warning(
-        `Plaid auto-sync: errors on ${failed.length} account(s) — see the sync log`,
+        `Auto-sync: errors on ${failed.length} account(s) — see the sync log`,
       );
     } else if (imported > 0) {
-      ctx.api.toast.success(`Plaid auto-sync: ${imported} activities imported`);
+      ctx.api.toast.success(`Auto-sync: ${imported} activities imported`);
     }
   } catch (error) {
     ctx.api.logger.error(
-      `plaid-sync auto-sync failed: ${error instanceof Error ? error.message : String(error)}`,
+      `account-sync auto-sync failed: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
 }

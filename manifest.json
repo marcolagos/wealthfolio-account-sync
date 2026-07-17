@@ -1,7 +1,7 @@
 {
-  "id": "plaid-sync",
+  "id": "account-sync",
   "name": "Account Sync",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Auto-sync bank, credit, and brokerage accounts via Plaid and SnapTrade",
   "author": "Marco Lagos",
   "main": "dist/addon.js",
