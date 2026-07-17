@@ -4,6 +4,25 @@ All notable changes to this addon are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-07-18
+
+### Fixed
+
+- **FDIC-insured deposit sweeps** (Fidelity core-account cash parked in a
+  partner-bank deposit; pseudo-symbols `FDIC#####`, "CORE ACCOUNT FDIC
+  INSURED DEPOSIT") are now recognized as cash churn and skipped, like
+  money-market sweeps (SPAXX/FDRXX). Previously their unresolvable
+  pseudo-tickers were rejected as errors. Verified safe against live Fidelity
+  data: real CASH CONTRIBUTION / INTEREST / DIVIDEND rows are separate and
+  still import; the paired core-account buy/sell carries no economic signal.
+- **Unresolvable-but-real symbols** (institutional 401k funds like `PBHK`,
+  delisted tickers) are no longer dropped. When the host rejects a symbol
+  only because it isn't in market data, the row is retried as a
+  **manual-quote asset** — imported at the broker-provided price so the
+  position and history appear; it just won't get live price updates (no
+  public data exists for these). Surfaced in the sync log as "N imported as
+  manual-priced". Applies to both SnapTrade and Plaid investment rows.
+
 ## [0.3.0] - 2026-07-18
 
 ### Changed

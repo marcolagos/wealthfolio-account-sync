@@ -1,4 +1,8 @@
-import type { ActivityImport, AddonContext } from "@wealthfolio/addon-sdk";
+import type {
+  ActivityCreate,
+  ActivityImport,
+  AddonContext,
+} from "@wealthfolio/addon-sdk";
 import { linkProvider, loadMapping, type SyncKind } from "../lib/mapping";
 import { PlaidClient, type PlaidItemRef } from "../plaid/client";
 import type {
@@ -114,13 +118,103 @@ function isoDaysAgo(days: number): string {
  */
 const IMPORT_CHUNK_SIZE = 150;
 
+/** A symbol row the host rejected purely because the ticker isn't in market
+ *  data (institutional 401k funds, delisted names). These are real holdings —
+ *  re-importable as manual-quote assets, which bypass the market-data lookup. */
+const MARKET_DATA_REJECT = /could not find .* in market data/i;
+
+function isMarketDataReject(r: ActivityImport): boolean {
+  const msgs = r.errors?.symbol ?? [];
+  return (
+    (r.symbol ?? "").trim() !== "" &&
+    msgs.some((m) => MARKET_DATA_REJECT.test(m))
+  );
+}
+
+/** Map a checked row to a saveMany create. `manual` marks the asset
+ *  manual-quoted so an unresolvable symbol is accepted (imported at the
+ *  broker-provided price, no live market data). */
+function toCreate(r: ActivityImport, manual: boolean): ActivityCreate {
+  return {
+    accountId: r.accountId,
+    activityType: r.activityType,
+    activityDate:
+      typeof r.date === "string"
+        ? r.date
+        : (r.date?.toISOString().slice(0, 10) ?? ""),
+    asset: {
+      symbol: (r.symbol ?? "").trim(),
+      exchangeMic: r.exchangeMic,
+      quoteCcy: r.quoteCcy,
+      instrumentType: r.instrumentType,
+      providerId: r.providerId,
+      providerSymbol: r.providerSymbol,
+      name: r.symbolName,
+      ...(manual ? { quoteMode: "MANUAL" as const } : {}),
+    },
+    quantity: r.quantity,
+    unitPrice: r.unitPrice,
+    amount: r.amount,
+    currency: r.currency,
+    fee: r.fee,
+    comment: r.comment,
+  };
+}
+
+/** saveMany with a row-by-row duplicate fallback: saveMany is transactional,
+ *  so one DB-level duplicate rejects the whole batch. checkImport can miss a
+ *  few (its review-step key differs subtly from the stored create-step key),
+ *  so on a duplicate failure retry per row — only on small incremental
+ *  overlaps. Throws on any non-duplicate error. */
+async function saveCreates(
+  ctx: AddonContext,
+  creates: ActivityCreate[],
+): Promise<{ imported: number; duplicates: number }> {
+  let imported = 0;
+  let duplicates = 0;
+  try {
+    const result = await ctx.api.activities.saveMany({ creates });
+    imported += result.created.length;
+    duplicates += result.errors.filter((e) =>
+      /duplicate/i.test(e.message),
+    ).length;
+    const realErrors = result.errors.filter(
+      (e) => !/duplicate/i.test(e.message),
+    );
+    if (realErrors.length > 0) {
+      throw new Error(
+        `${realErrors.length} activities failed to save (e.g. ${realErrors[0].message})`,
+      );
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/duplicate/i.test(message)) throw error;
+    for (const create of creates) {
+      try {
+        const single = await ctx.api.activities.saveMany({ creates: [create] });
+        imported += single.created.length;
+        duplicates += single.errors.filter((e) =>
+          /duplicate/i.test(e.message),
+        ).length;
+      } catch (rowError) {
+        const rowMessage =
+          rowError instanceof Error ? rowError.message : String(rowError);
+        if (!/duplicate/i.test(rowMessage)) throw rowError;
+        duplicates += 1;
+      }
+    }
+  }
+  return { imported, duplicates };
+}
+
 /**
  * Symbol-bearing rows (BUY/SELL/DIVIDEND/TRANSFER of a security) must go
  * through `saveMany` — only that path runs the ensure-assets step that
  * creates and links asset records. `import()` inserts rows as-is (its asset
  * step belongs to the CSV UI's review flow), which would leave BUYs with no
  * asset and break holdings calculation. Cash rows stay on `import()`, which
- * gives the cheap bulk dedup summary.
+ * gives the cheap bulk dedup summary. Symbols the host can't resolve to market
+ * data are retried as manual-quote assets rather than dropped.
  */
 async function importRows(
   ctx: AddonContext,
@@ -130,22 +224,28 @@ async function importRows(
   duplicates: number;
   invalid: number;
   invalidExample?: string;
+  manual: number;
 }> {
   let imported = 0;
   let duplicates = 0;
   let invalid = 0;
+  let manual = 0;
   let invalidExample: string | undefined;
   for (let i = 0; i < rows.length; i += IMPORT_CHUNK_SIZE) {
     const chunk = rows.slice(i, i + IMPORT_CHUNK_SIZE);
     const checked = await ctx.api.activities.checkImport(chunk);
     duplicates += checked.filter((r) => r.duplicateOfId).length;
-    // Rows the check marks invalid would otherwise vanish silently — count
-    // them and keep one example so the sync log shows what was rejected.
-    const invalidRows = checked.filter((r) => !r.isValid && !r.duplicateOfId);
-    if (invalidRows.length > 0) {
-      invalid += invalidRows.length;
+
+    // Split the rejects: unresolvable-symbol rows get a manual-quote retry;
+    // anything else is a hard reject we surface as skipped (so it never
+    // vanishes silently).
+    const rejected = checked.filter((r) => !r.isValid && !r.duplicateOfId);
+    const manualRetry = rejected.filter(isMarketDataReject);
+    const hardInvalid = rejected.filter((r) => !isMarketDataReject(r));
+    if (hardInvalid.length > 0) {
+      invalid += hardInvalid.length;
       if (!invalidExample) {
-        const first = invalidRows[0];
+        const first = hardInvalid[0];
         const detail = first.errors
           ? Object.entries(first.errors)
               .map(([field, msgs]) => `${field}: ${msgs.join("; ")}`)
@@ -154,9 +254,8 @@ async function importRows(
         invalidExample = `"${first.comment ?? first.activityType}" → ${detail}`;
       }
     }
-    const importable = checked.filter((r) => r.isValid && !r.duplicateOfId);
-    if (importable.length === 0) continue;
 
+    const importable = checked.filter((r) => r.isValid && !r.duplicateOfId);
     const cashRows = importable.filter((r) => !(r.symbol ?? "").trim());
     const assetRows = importable.filter((r) => (r.symbol ?? "").trim());
 
@@ -172,70 +271,35 @@ async function importRows(
     }
 
     if (assetRows.length > 0) {
-      const creates = assetRows.map((r) => ({
-        accountId: r.accountId,
-        activityType: r.activityType,
-        activityDate:
-          typeof r.date === "string"
-            ? r.date
-            : (r.date?.toISOString().slice(0, 10) ?? ""),
-        asset: {
-          symbol: (r.symbol ?? "").trim(),
-          exchangeMic: r.exchangeMic,
-          quoteCcy: r.quoteCcy,
-          instrumentType: r.instrumentType,
-          providerId: r.providerId,
-          providerSymbol: r.providerSymbol,
-          name: r.symbolName,
-        },
-        quantity: r.quantity,
-        unitPrice: r.unitPrice,
-        amount: r.amount,
-        currency: r.currency,
-        fee: r.fee,
-        comment: r.comment,
-      }));
-      // saveMany is transactional: one DB-level duplicate rejects the whole
-      // batch. checkImport can miss a few (its review-step key differs subtly
-      // from the stored create-step key), so on a duplicate failure fall back
-      // to row-by-row saves — this only happens on small incremental overlaps.
+      const res = await saveCreates(
+        ctx,
+        assetRows.map((r) => toCreate(r, false)),
+      );
+      imported += res.imported;
+      duplicates += res.duplicates;
+    }
+
+    if (manualRetry.length > 0) {
       try {
-        const result = await ctx.api.activities.saveMany({ creates });
-        imported += result.created.length;
-        duplicates += result.errors.filter((e) =>
-          /duplicate/i.test(e.message),
-        ).length;
-        const realErrors = result.errors.filter(
-          (e) => !/duplicate/i.test(e.message),
+        const res = await saveCreates(
+          ctx,
+          manualRetry.map((r) => toCreate(r, true)),
         );
-        if (realErrors.length > 0) {
-          throw new Error(
-            `${realErrors.length} activities failed to save (e.g. ${realErrors[0].message})`,
-          );
-        }
+        imported += res.imported;
+        duplicates += res.duplicates;
+        manual += res.imported;
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (!/duplicate/i.test(message)) throw error;
-        for (const create of creates) {
-          try {
-            const single = await ctx.api.activities.saveMany({
-              creates: [create],
-            });
-            imported += single.created.length;
-            duplicates += single.errors.filter((e) =>
-              /duplicate/i.test(e.message),
-            ).length;
-          } catch (rowError) {
-            const rowMessage =
-              rowError instanceof Error ? rowError.message : String(rowError);
-            if (!/duplicate/i.test(rowMessage)) throw rowError;
-            duplicates += 1;
-          }
+        // Even a manual retry failed — count as skipped, don't fail the account.
+        invalid += manualRetry.length;
+        if (!invalidExample) {
+          invalidExample = `manual import failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`;
         }
       }
     }
   }
-  return { imported, duplicates, invalid, invalidExample };
+  return { imported, duplicates, invalid, invalidExample, manual };
 }
 
 async function syncItemBanking(
@@ -288,18 +352,24 @@ async function syncItemBanking(
         const anchor = buildBankingAnchor(account, accountTxns, m.wfAccountId);
         if (anchor) rows.unshift(anchor);
       }
-      const { imported, duplicates, invalid, invalidExample } =
+      const { imported, duplicates, invalid, invalidExample, manual } =
         await importRows(ctx, rows);
       outcome.imported = imported;
       outcome.duplicates = duplicates;
-      if (invalid > 0) {
-        // Rows the host's import validation rejects (e.g. a symbol market
-        // data can't resolve) are permanent — retrying can't fix them, so
-        // don't fail the account or hold the cursor. Count them as skipped
-        // and explain in the log.
-        outcome.skippedRows += invalid;
-        outcome.note = `${invalid} row(s) rejected by import validation — e.g. ${invalidExample}`;
-      }
+      if (invalid > 0) outcome.skippedRows += invalid;
+      // manual: unresolvable symbols imported as manual-priced assets.
+      // invalid: hard rejects, surfaced as skipped so they never vanish.
+      outcome.note =
+        [
+          manual > 0
+            ? `${manual} imported as manual-priced (symbol not in market data)`
+            : "",
+          invalid > 0
+            ? `${invalid} row(s) rejected by import validation — e.g. ${invalidExample}`
+            : "",
+        ]
+          .filter(Boolean)
+          .join("; ") || undefined;
       if (!state.baselined.includes(m.plaidAccountId))
         state.baselined.push(m.plaidAccountId);
     } catch (error) {
@@ -424,18 +494,24 @@ async function syncItemInvestments(
         rows.unshift(...baseline);
       }
 
-      const { imported, duplicates, invalid, invalidExample } =
+      const { imported, duplicates, invalid, invalidExample, manual } =
         await importRows(ctx, rows);
       outcome.imported = imported;
       outcome.duplicates = duplicates;
-      if (invalid > 0) {
-        // Rows the host's import validation rejects (e.g. a symbol market
-        // data can't resolve) are permanent — retrying can't fix them, so
-        // don't fail the account or hold the cursor. Count them as skipped
-        // and explain in the log.
-        outcome.skippedRows += invalid;
-        outcome.note = `${invalid} row(s) rejected by import validation — e.g. ${invalidExample}`;
-      }
+      if (invalid > 0) outcome.skippedRows += invalid;
+      // manual: unresolvable symbols imported as manual-priced assets.
+      // invalid: hard rejects, surfaced as skipped so they never vanish.
+      outcome.note =
+        [
+          manual > 0
+            ? `${manual} imported as manual-priced (symbol not in market data)`
+            : "",
+          invalid > 0
+            ? `${invalid} row(s) rejected by import validation — e.g. ${invalidExample}`
+            : "",
+        ]
+          .filter(Boolean)
+          .join("; ") || undefined;
       if (!state.baselined.includes(m.plaidAccountId))
         state.baselined.push(m.plaidAccountId);
     } catch (error) {
@@ -536,19 +612,23 @@ async function syncSnapTradeAccounts(
         rows.unshift(...baseline);
       }
 
-      const { imported, duplicates, invalid, invalidExample } =
+      const { imported, duplicates, invalid, invalidExample, manual } =
         await importRows(ctx, rows);
       outcome.imported = imported;
       outcome.duplicates = duplicates;
-      if (invalid > 0) {
-        outcome.skippedRows += invalid;
-        outcome.note = [
+      if (invalid > 0) outcome.skippedRows += invalid;
+      outcome.note =
+        [
           outcome.note,
-          `${invalid} row(s) rejected by import validation — e.g. ${invalidExample}`,
+          manual > 0
+            ? `${manual} imported as manual-priced (symbol not in market data)`
+            : "",
+          invalid > 0
+            ? `${invalid} row(s) rejected by import validation — e.g. ${invalidExample}`
+            : "",
         ]
           .filter(Boolean)
-          .join("; ");
-      }
+          .join("; ") || undefined;
       if (isNew) state.baselined.push(m.plaidAccountId);
       state.snapCheckpoints[m.plaidAccountId] = today;
     } catch (error) {

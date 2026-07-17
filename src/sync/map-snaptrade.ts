@@ -10,16 +10,31 @@ import type { SnapTradeActivity, SnapTradePosition } from "../snaptrade/types";
  */
 
 /** Money-market sweep funds (SPAXX, FDRXX, VMFXX, SWVXX…): cash churn, not
- *  positions. Trades in them at $1.00 are skipped — the cash-flow rows
- *  (CONTRIBUTION/WITHDRAWAL/BUY/SELL of real securities) already balance. */
+ *  positions. Trades in them at $1.00 are skipped. */
 const SWEEP_PATTERN = /^[A-Z]{2,4}XX$/;
+/** FDIC-insured deposit sweeps: Fidelity et al. park uninvested cash in a
+ *  partner-bank deposit (pseudo-symbol FDIC#####, description "CORE ACCOUNT
+ *  FDIC INSURED DEPOSIT"). Same cash churn as money-market sweeps — the real
+ *  CONTRIBUTION/INTEREST/DIVIDEND rows are separate (verified against live
+ *  Fidelity data), so the buy/sell into the core account carries no economic
+ *  signal and its pseudo-ticker resolves to nothing. */
+const FDIC_SWEEP_PATTERN = /^FDIC\d+$/i;
+const CORE_ACCOUNT_PATTERN = /core account|fdic insured deposit/i;
 
-function isSweepTrade(activity: SnapTradeActivity, symbol: string): boolean {
-  return (
-    symbol !== "" &&
+/** True when a BUY/SELL/REI/TRANSFER row is just cash sweeping in/out of a
+ *  core cash vehicle (not a real position). NOT consulted for cash activity
+ *  types (INTEREST/DIVIDEND/CONTRIBUTION/…), whose own branches force an empty
+ *  symbol — so a genuine "INTEREST EARNED FDIC…" row still imports as cash. */
+function isCashSweep(activity: SnapTradeActivity, symbol: string): boolean {
+  if (symbol && FDIC_SWEEP_PATTERN.test(symbol)) return true;
+  if (
+    symbol &&
     SWEEP_PATTERN.test(symbol) &&
     Math.abs(activity.price ?? 0) === 1
-  );
+  ) {
+    return true;
+  }
+  return CORE_ACCOUNT_PATTERN.test(activity.description ?? "");
 }
 
 export interface SnapTradeMapResult {
@@ -81,12 +96,18 @@ export function mapSnapTradeActivities(
     const type = activity.type.toUpperCase();
 
     if (
-      (type === "BUY" || type === "SELL" || type === "REI") &&
-      isSweepTrade(activity, symbol)
+      (type === "BUY" ||
+        type === "SELL" ||
+        type === "REI" ||
+        type === "TRANSFER") &&
+      isCashSweep(activity, symbol)
     ) {
+      const kind = FDIC_SWEEP_PATTERN.test(symbol)
+        ? "FDIC deposit"
+        : "money-market";
       skipped.push({
         id: activity.id,
-        reason: `money-market sweep (${symbol})`,
+        reason: `${kind} sweep (${symbol || activity.description || "core"})`,
       });
       continue;
     }
@@ -267,7 +288,10 @@ export function buildSnapTradeBaseline(
     const sym = (position.symbol?.symbol?.symbol ?? "").trim();
     const units = position.units ?? 0;
     if (units <= 0) continue;
-    if (position.cash_equivalent || (sym && SWEEP_PATTERN.test(sym))) {
+    if (
+      position.cash_equivalent ||
+      (sym && (SWEEP_PATTERN.test(sym) || FDIC_SWEEP_PATTERN.test(sym)))
+    ) {
       cashAnchor += units * (position.price ?? 1);
       continue;
     }
